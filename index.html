@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>CAMPER PARK — Gestión avanzada (Plazas diarias) - OFFLINE</title>
+
+  <script src="tailwind.min.js"></script>
+  <script defer src="alpine.min.js"></script>
+
+  <style>
+    /* Estilos de colores (se mantienen) */
+    .bg-entrada { background-color: #FFA85A; }   /* naranja */
+    .bg-salida  { background-color: #FFFF00; }   /* ¡AMARILLO CHILLÓN! */
+    .bg-libre   { background-color: #C8E6C9; }   /* verde claro */
+    .bg-salio   { background-color: #FFCDD2; }   /* rojo claro (salió y fecha posterior) */
+    
+    .table-fixed { table-layout: fixed; width: 100%; }
+    td, th { word-wrap: break-word; }
+    /* botones pequeños en fila acciones */
+    .btn-xs { padding: .25rem .5rem; font-size: .75rem; border-radius: .25rem; }
+    /* Estilo para los select que ahora son nativos */
+    select.mt-1 { height: 42px; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+  <div class="max-w-7xl mx-auto p-6" x-data="app()">
+    <header class="mb-6">
+      <h1 class="text-2xl font-semibold">CAMPER PARK — Gestión diaria de plazas  </h1>
+      <p class="text-sm text-gray-600">Vista diaria con 47 plazas en orden fijo. Filtra por fecha / estado / vehículo / luz. La Matrícula/Otros busca en **todos** los registros. Importa / exporta JSON y CSV.</p>
+    </header>
+
+    <section class="bg-white p-4 rounded-lg shadow-sm mb-6">
+      <div class="grid grid-cols-1 md:grid-cols-7 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Fecha a consultar</label>
+          <input x-model="filtros.fecha" type="date" class="mt-1 p-2 border rounded w-full" @input="renderTabla()" :disabled="filtros.mostrarTodos" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Plaza</label>
+          <select x-model="filtros.plaza" class="mt-1 p-2 border rounded w-full" @change="renderTabla()">
+            <option value="">— Todas —</option>
+            <template x-for="p in ordenPlazas" :key="p">
+              <option :value="p" x-text="p"></option>
+            </template>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Estado</label>
+          <select x-model="filtros.estado" class="mt-1 p-2 border rounded w-full" @change="renderTabla()">
+            <option value="">— Todos —</option>
+            <template x-for="opt in opciones.estadoAll" :key="opt">
+              <option :value="opt" x-text="opt"></option>
+            </template>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Vehículo</label>
+          <select x-model="filtros.vehiculo" class="mt-1 p-2 border rounded w-full" @change="renderTabla()">
+            <option value="">— Todos —</option>
+            <template x-for="opt in opciones.vehiculoAll" :key="opt">
+              <option :value="opt" x-text="opt"></option>
+            </template>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Luz</label>
+          <select x-model="filtros.luz" class="mt-1 p-2 border rounded w-full" @change="renderTabla()">
+            <option value="">— Todos —</option>
+            <option value="Sí">Sí</option>
+            <option value="No">No</option>
+          </select>
+        </div>
+        
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Matrícula (Buscar **Global**)</label>
+          <input x-model="filtros.matricula" type="text" class="mt-1 p-2 border rounded w-full" @input.uppercase="renderTabla()" placeholder="EJ: 0154MD" />
+        </div>
+        
+        <div>
+          <label class="block text-xs font-medium text-gray-600">Otros (Buscar **Global**)</label>
+          <input x-model="filtros.otros" type="text" class="mt-1 p-2 border rounded w-full" @input.uppercase="renderTabla()" placeholder="Ej: Miguel,TPV, 32  " />
+        </div>
+        
+        <div class="flex gap-2 items-end">
+          <button @click="renderTabla()" class="px-4 py-2 bg-indigo-600 text-white rounded shadow hover:bg-indigo-700">Aplicar</button>
+          <button @click="resetFiltros()" class="px-4 py-2 bg-white border rounded">Limpiar</button>
+          <button @click="showAllRecords()" class="px-4 py-2 bg-purple-600 text-white rounded shadow hover:bg-purple-700 whitespace-nowrap">Ver Todos los Registros</button>
+        </div>
+        </div>
+
+      <div class="mt-4 flex items-center gap-3">
+        <input id="fileJson" x-ref="fileJson" type="file" accept=".json,application/json" class="hidden" @change="importJSONFile($event)" />
+        <button @click="$refs.fileJson.click()" class="px-3 py-1 bg-blue-500 text-white rounded">Importar JSON</button>
+        <button @click="exportJSON()" class="px-4 py-2 bg-green-600 text-white rounded">Exportar JSON</button>
+        
+        <button @click="exportToCSV()" class="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Exportar a CSV/Excel</button>
+        
+        <button @click="addRegistro()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Añadir registro</button>
+        
+        <div class="ml-auto text-sm text-gray-600 flex gap-3 items-center">
+          <span class="inline-flex items-center gap-2"><span class="inline-block w-3 h-3 bg-entrada"></span> Entrada</span>
+          <span class="inline-flex items-center gap-2"><span class="inline-block w-3 h-3 bg-salida"></span> Salida **HOY**</span>
+          <span class="inline-flex items-center gap-2"><span class="inline-block w-3 h-3 bg-libre"></span> Libre</span>
+          <span class="inline-flex items-center gap-2"><span class="inline-block w-3 h-3 bg-salio"></span> Salió</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="bg-white p-4 rounded-lg shadow-sm mb-6">
+        <h2 class="text-xl font-semibold mb-3">Resumen de Vehículos (Vista Actual)</h2>
+        <div class="flex gap-6 text-lg font-medium">
+            <div>
+                Registros Totales (Base de Datos):
+                <span class="text-gray-600 font-bold" x-text="totalRegistros">0</span>
+            </div>
+            
+            <div class="contents" x-show="!filtros.mostrarTodos">
+                <div>
+                    Vehículos Quedan (Neto): 
+                    <span class="text-indigo-600 font-bold" x-text="totalVehiculosNeto">0</span>
+                </div>
+                
+                <div>
+                    Plazas Libres (Verde): 
+                    <span class="bg-libre px-2 rounded font-bold" x-text="summary.libres">0</span>
+                </div>
+
+                <div>
+                    Registros Salida Hoy (Amarillo): 
+                    <span class="bg-salida px-2 rounded font-bold" x-text="summary.salidaHoy">0</span>
+                </div>
+                
+                <div class="text-sm text-gray-500 flex items-end">
+                    (Total antes de salidas: <span x-text="summary.totalBruto">0</span>)
+                </div>
+            </div>
+            <div x-show="filtros.mostrarTodos" class="text-sm text-gray-700 flex items-end font-semibold">
+                Modo: Vista Total de Registros.
+                <span class="ml-2 text-indigo-600"> &rarr; Pulsa **'Limpiar'** para volver al cálculo diario.</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="bg-white rounded-lg shadow-sm p-4 mb-6">
+      <h2 class="text-xl font-semibold mb-3">
+        <template x-if="filtros.mostrarTodos">
+          Registros de Plazas (Vista Total - Ordenado por entrada descendente)
+        </template>
+        <template x-if="!filtros.mostrarTodos">
+          Registros de Plazas (Vista Diaria: <span x-text="filtros.fecha || 'N/A'"></span>)
+        </template>
+      </h2>
+      <div class="overflow-x-auto">
+        <table class="table-fixed min-w-full border-collapse">
+          <thead class="bg-gray-100"> 
+            <tr>
+              <th class="text-left p-2 border w-36">Acción / Borrar</th> 
+              <th class="text-left p-2 border w-20">Nº Plaza</th>
+              <th class="text-left p-2 border w-32">Entrada</th>
+              <th class="text-left p-2 border w-32">Salida</th>
+              <th class="text-left p-2 border w-28">Estado</th>
+              <th class="text-left p-2 border w-32">Matrícula</th>
+              <th class="text-left p-2 border w-36">Vehículo</th>
+              <th class="text-left p-2 border w-20">Luz</th>
+              <th class="text-left p-2 border w-20">País</th>
+              <th class="text-left p-2 border">Otros</th> 
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="record in allDisplayRecords" :key="record._id">
+              <tr :class="rowColorClass(record)" class="hover:shadow-sm">
+                <td class="p-2 border text-sm align-top w-36">
+                  <div class="flex flex-col gap-1">
+                    <template x-if="!record._editing">
+                      <div class="flex gap-1 flex-wrap">
+                        <button @click="startEdit(record)" class="btn-xs bg-yellow-400">Editar</button>
+                        
+                        <template x-if="!record._virtual">
+                            <button @click="deleteRecord(record)" class="btn-xs bg-red-600 text-white">Eliminar</button>
+                        </template>
+                      </div>
+                    </template>
+                    <template x-if="record._editing">
+                      <div class="flex gap-1">
+                        <button @click="saveEdit(record)" class="btn-xs bg-green-600 text-white">Guardar</button>
+                        <button @click="cancelEdit(record)" class="btn-xs bg-gray-300">Cancelar</button>
+                      </div>
+                    </template>
+                  </div>
+                </td>
+
+                <td class="p-2 border text-sm align-top w-20">
+                  <div x-text="record.plaza"></div>
+                </td>
+
+                <td class="p-2 border text-sm w-32">
+                  <template x-if="!record._editing">
+                    <div x-text="record.entrada ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <input type="date" x-model="record._editCopy.entrada" class="p-1 border rounded w-full text-sm" />
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm w-32">
+                  <template x-if="!record._editing">
+                    <div x-text="record.salida ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <input type="date" x-model="record._editCopy.salida" class="p-1 border rounded w-full text-sm" />
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm w-28">
+                  <template x-if="!record._editing">
+                    <div x-text="record.estado ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <select x-model="record._editCopy.estado" class="p-1 border rounded w-full text-sm">
+                      <option value=""></option>
+                      <template x-for="opt in opciones.estadoAll" :key="opt">
+                        <option :value="opt" x-text="opt"></option>
+                      </template>
+                    </select>
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm w-32">
+                  <template x-if="!record._editing">
+                    <div x-text="record.matricula ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <input x-model="record._editCopy.matricula" class="p-1 border rounded w-full text-sm" @input.uppercase="$event.target.value = $event.target.value.toUpperCase()" placeholder=" MATRICULA" />
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm w-36">
+                  <template x-if="!record._editing">
+                    <div x-text="record.vehiculo ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <select x-model="record._editCopy.vehiculo" class="p-1 border rounded w-full text-sm">
+                      <option value=""></option>
+                      <template x-for="opt in opciones.vehiculoAll" :key="opt">
+                        <option :value="opt" x-text="opt"></option>
+                      </template>
+                    </select>
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm w-20">
+                  <template x-if="!record._editing">
+                    <div x-text="record.luz ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <select x-model="record._editCopy.luz" class="p-1 border rounded w-full text-sm">
+                      <option value=""></option>
+                      <option value="Sí">Sí</option>
+                      <option value="No">No</option>
+                    </select>
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm w-20">
+                  <template x-if="!record._editing">
+                    <div x-text="record.pais ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <input x-model="record._editCopy.pais" class="p-1 border rounded w-full text-sm" @input.uppercase="$event.target.value = $event.target.value.toUpperCase()" placeholder=" PAIS" />
+                  </template>
+                </td>
+
+                <td class="p-2 border text-sm">
+                  <template x-if="!record._editing">
+                    <div x-text="record.otros ?? ''"></div>
+                  </template>
+                  <template x-if="record._editing">
+                    <input x-model="record._editCopy.otros" class="p-1 border rounded w-full text-sm" @input.uppercase="$event.target.value = $event.target.value.toUpperCase()" />
+                  </template>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="mt-4 text-sm text-gray-500">
+      <p>Los cambios que guardes actualizan el almacenamiento local (localStorage). Importa y exporta para respaldo o carga masiva.</p>
+    </footer>
+  </div>
+
+  <script>
+    function app(){
+      return {
+        // Orden fijo de las 47 plazas
+        ordenPlazas: ["1","2","3","4","42","43","44","5","6","7","8","9","10","11","12B","12","13","14","15","16","17","18","26","26B","19","20","21","22","23","24","25","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41"],
+        
+        // Propiedad para el resumen
+        summary: {
+          libres: 0,
+          salidaHoy: 0,
+          totalBruto: 0 
+        },
+
+        lastUsedEstado: "OCUPADA", 
+        lastUsedVehiculo: "AUTOCARAVANA",
+
+        // Propiedad calculada: Total de vehículos activos RESTANDO las salidas de hoy
+        get totalVehiculosNeto() {
+            // El total bruto (Total Ocupados/Reservados/Entradas) menos las salidas de hoy
+            return this.summary.totalBruto - this.summary.salidaHoy;
+        },
+        
+        // Contador de registros totales en la base de datos (localStorage)
+        get totalRegistros() {
+            return this.registros.length;
+        },
+
+        get allDisplayRecords() {
+            const matriculaSearchTerm = (this.filtros.matricula || '').toUpperCase().trim();
+            const otrosSearchTerm = (this.filtros.otros || '').toUpperCase().trim(); 
+            
+            // Reiniciar el summary en cada cálculo
+            this.summary.libres = 0;
+            this.summary.salidaHoy = 0;
+            this.summary.totalBruto = 0;
+            
+            // --- MODO 1: VER TODOS LOS REGISTROS (sin filtro de fecha) ---
+            if (this.filtros.mostrarTodos) {
+                this.summary.totalBruto = this.registros.length;
+                
+                let allRecords = this.registros.map(r => {
+                     if (!r._id) r._id = genId();
+                     if (typeof r._editing === 'undefined') r._editing = false;
+                     return r;
+                }).filter(r => {
+                    const matricula = (r.matricula || '').toUpperCase();
+                    const otros = (r.otros || '').toUpperCase(); 
+                            
+                    // Aplicar todos los filtros de la interfaz (Plaza, Estado, Vehículo, Luz)
+                    if (this.filtros.plaza && String(r.plaza) !== this.filtros.plaza) return false;
+                    if (this.filtros.estado && r.estado !== this.filtros.estado) return false;
+                    if (this.filtros.vehiculo && r.vehiculo !== this.filtros.vehiculo) return false;
+                    if (this.filtros.luz && r.luz !== this.filtros.luz) return false;
+                    
+                    // Filtrar por Matrícula O Otros
+                    const matchesGlobalSearch = 
+                        (!matriculaSearchTerm || matricula.includes(matriculaSearchTerm)) &&
+                        (!otrosSearchTerm || otros.includes(otrosSearchTerm));
+                    if (!matchesGlobalSearch) return false;
+                    
+                    return true;
+                });
+                
+                // Ordenación por fecha de Entrada descendente (eB - eA)
+                return allRecords.sort((a, b) => {
+                    const eA = this.parseDate(a.entrada) || new Date(0);
+                    const eB = this.parseDate(b.entrada) || new Date(0);
+                    
+                    // Orden principal: Entrada descendente (más reciente primero)
+                    if (eB - eA !== 0) {
+                        return eB - eA;
+                    }
+                    
+                    // Orden secundario: por orden fijo de plaza (para estabilidad si las fechas son iguales)
+                    const indexA = this.ordenPlazas.indexOf(String(a.plaza));
+                    const indexB = this.ordenPlazas.indexOf(String(b.plaza));
+                    return indexA - indexB; 
+                });
+            }
+            
+            // --- MODO 2: VISTA DIARIA NORMAL (con solapamiento) O BÚSQUEDA GLOBAL POR MATRÍCULA/OTROS ---
+            
+            const fecha = this.parseDate(this.filtros.fecha);
+            let recordsToDisplay = [];
+            
+            // Si no hay fecha y no hay búsqueda global, no mostramos nada.
+            if (!fecha && !matriculaSearchTerm && !otrosSearchTerm) return []; 
+
+            
+            // --- MODO 2a: BÚSQUEDA GLOBAL DE MATRÍCULA / OTROS (A pesar de tener fecha) ---
+            if (matriculaSearchTerm || otrosSearchTerm) { 
+                recordsToDisplay = this.registros.filter(r => {
+                    const matricula = (r.matricula || '').toUpperCase();
+                    const otros = (r.otros || '').toUpperCase(); 
+                    
+                    // 1. Filtrar por Matrícula O Otros (GLOBAL)
+                    const matchesGlobalSearch = 
+                        (!matriculaSearchTerm || matricula.includes(matriculaSearchTerm)) &&
+                        (!otrosSearchTerm || otros.includes(otrosSearchTerm));
+
+                    if (!matchesGlobalSearch) return false;
+
+                    // 2. Aplicar otros filtros de la interfaz (Plaza, Estado, Vehículo, Luz)
+                    if (this.filtros.plaza && String(r.plaza) !== this.filtros.plaza) return false;
+                    if (this.filtros.estado && r.estado !== this.filtros.estado) return false;
+                    if (this.filtros.vehiculo && r.vehiculo !== this.filtros.vehiculo) return false;
+                    if (this.filtros.luz && r.luz !== this.filtros.luz) return false;
+
+                    return true;
+                }).map(r => {
+                    // Inicializar metadata
+                    if (!r._id) r._id = genId();
+                    if (typeof r._editing === 'undefined') r._editing = false;
+                    return r;
+                });
+                
+            // --- MODO 2b: VISTA DIARIA NORMAL (con solapamiento) ---
+            } else {
+                
+                let plazasToIterate = this.ordenPlazas;
+                if (this.filtros.plaza) {
+                    plazasToIterate = [this.filtros.plaza];
+                }
+
+                plazasToIterate.forEach(plaza => {
+                    let matchingRecords = this.registros.filter(r => {
+                        if (String(r.plaza) !== String(plaza)) return false;
+
+                        const e = this.parseDate(r.entrada);
+                        const s = this.parseDate(r.salida);
+                        
+                        // Comprobar si el registro abarca la fecha seleccionada
+                        if (e && s) {
+                            return fecha >= e && fecha <= s;
+                        } else if (e && !s) {
+                            return fecha >= e;
+                        } else if (!e && s) {
+                            return fecha <= s; 
+                        } else {
+                            return false; 
+                        }
+                    });
+
+                    // Si no se encuentran registros, añadir un registro virtual/vacío (si no hay filtros diarios activos)
+                    if (matchingRecords.length === 0) {
+                        const dailyFiltersActive = this.filtros.estado || this.filtros.vehiculo || this.filtros.luz || this.filtros.otros; 
+                        if (!dailyFiltersActive) { 
+                            if (!this._virtualMap) this._virtualMap = {};
+                            const key = String(plaza);
+                            if (!this._virtualMap[key] || !this._virtualMap[key]._virtual) {
+                                this._virtualMap[key] = this.createVirtualRecord(plaza);
+                            }
+                            matchingRecords = [this._virtualMap[key]];
+                        } else {
+                            return;
+                        }
+                    }
+                    
+                    // Inicializar metadata y aplicar filtros diarios (Estado, Vehiculo, Luz, Otros)
+                    matchingRecords = matchingRecords.map(r => {
+                        if (!r._id) r._id = genId();
+                        if (typeof r._editing === 'undefined') r._editing = false;
+                        return r;
+                    }).filter(r => {
+                        if (this.filtros.estado && r.estado !== this.filtros.estado) return false;
+                        if (this.filtros.vehiculo && r.vehiculo !== this.filtros.vehiculo) return false;
+                        if (this.filtros.luz && r.luz !== this.filtros.luz) return false;
+                        const otros = (r.otros || '').toUpperCase();
+                        if (this.filtros.otros && !otros.includes(otrosSearchTerm)) return false;
+                        return true;
+                    });
+                    
+                    recordsToDisplay.push(...matchingRecords);
+                });
+            }
+            
+            // 5. Cálculo del resumen (Solo en vista diaria)
+            // Esto se ejecuta siempre que no estemos en modo "Mostrar Todos"
+            if (!this.filtros.mostrarTodos) {
+                // Contar plazas totales y salidas
+                recordsToDisplay.forEach(r => {
+                    const color = this.rowColorClass(r);
+                    
+                    // Los vehículos activos (Bruto) son todos los que NO son virtuales/libres
+                    if (!r._virtual && (r.estado || '').toUpperCase() !== 'LIBRE') {
+                        this.summary.totalBruto++;
+                    }
+
+                    // Contar Libres (Verde)
+                    if (color.includes('bg-libre') && ((r.estado || '').toUpperCase() === 'LIBRE' || r._virtual)) {
+                        this.summary.libres++;
+                    }
+                    
+                    // Contar Salida Hoy (Amarillo)
+                    if (color.includes('bg-salida')) {
+                        this.summary.salidaHoy++;
+                    }
+                });
+            }
+
+            // 6. Ordenación final: por orden fijo de plaza, luego por fecha de entrada (ascendente)
+            recordsToDisplay.sort((a, b) => {
+                const indexA = this.ordenPlazas.indexOf(String(a.plaza));
+                const indexB = this.ordenPlazas.indexOf(String(b.plaza));
+                
+                if (indexA !== indexB) {
+                    return indexA - indexB;
+                }
+                
+                const eA = this.parseDate(a.entrada) || new Date(0);
+                const eB = this.parseDate(b.entrada) || new Date(0);
+                return eA - eB; 
+            });
+
+            return recordsToDisplay;
+        },
+
+        // opciones
+        opciones: {
+          vehiculoAll: ["AUTOCARAVANA","FURGOCAMPER","CARAVANA","COCHECAMPER","CAMIONCAMPER","JEEPCAMPER"],
+          estadoAll: ["OCUPADA","LIBRE","RESERVADA","SALIO"]
+        },
+        filtros: { fecha: '', plaza: '', estado: '', vehiculo: '', luz: '', matricula: '', otros: '', mostrarTodos: false },
+
+        registros: [],
+        
+        init(){
+          const stored = localStorage.getItem('programa_camper_registros_v2');
+          if (stored) {
+            try { this.registros = JSON.parse(stored); } catch(e){ this.registros = []; }
+          }
+
+          if (!this.filtros.fecha) {
+            const d = new Date();
+            this.filtros.fecha = isoDate(d); 
+          }
+
+          const storedDefaults = localStorage.getItem('programa_camper_last_defaults');
+          if (storedDefaults) {
+              try {
+                  const defaults = JSON.parse(storedDefaults);
+                  this.lastUsedEstado = defaults.estado || "OCUPADA";
+                  this.lastUsedVehiculo = defaults.vehiculo || "AUTOCARAVANA";
+              } catch(e) { /* En caso de error de parseo, se mantienen los valores por defecto */ }
+          }
+        },
+
+        saveStorage(){
+          localStorage.setItem('programa_camper_registros_v2', JSON.stringify(this.registros));
+        },
+
+        saveLastUsedDefaults(){
+            const defaults = {
+                estado: this.lastUsedEstado,
+                vehiculo: this.lastUsedVehiculo
+            };
+            localStorage.setItem('programa_camper_last_defaults', JSON.stringify(defaults));
+        },
+        
+        addRegistro(){
+          const plaza = prompt("Nº Plaza (introduce número o identificador):", "") || "";
+          if (!plaza) return;
+
+          const nuevo = {
+            _id: genId(),
+            plaza: plaza,
+            entrada: this.filtros.fecha || isoDate(new Date()), 
+            salida: null,
+            estado: this.lastUsedEstado,
+            matricula: "",
+            vehiculo: this.lastUsedVehiculo,
+            luz: "No",
+            pais: "",
+            otros: ""
+          };
+          this.registros.push(nuevo);
+          this.saveStorage();
+          this.renderTabla();
+        },
+        
+        parseDate(s){ if (!s) return null; const d = new Date(s); if (isNaN(d.getTime())) return null; return new Date(d.getFullYear(), d.getMonth(), d.getDate()); },
+        isoDate(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().split('T')[0]; },
+        
+        createVirtualRecord(plaza) {
+            return {
+                _id: 'virtual_' + String(plaza),
+                plaza: String(plaza),
+                entrada: null,
+                salida: null,
+                estado: 'LIBRE', 
+                matricula: '',
+                vehiculo: '',
+                luz: 'No',
+                pais: '',
+                otros: '',
+                _editing: false,
+                _virtual: true 
+            };
+        },
+
+        startEdit(r){
+          if (!r._editing) {
+            r._editing = true;
+            
+            const estadoValue = r._virtual ? this.lastUsedEstado : r.estado ?? '';
+            const vehiculoValue = r._virtual ? this.lastUsedVehiculo : r.vehiculo ?? '';
+
+            r._editCopy = {
+              plaza: r.plaza ?? '',
+              entrada: r.entrada ?? '',
+              salida: r.salida ?? '',
+              estado: estadoValue, 
+              matricula: (r.matricula ?? '').toUpperCase(), 
+              vehiculo: vehiculoValue, 
+              luz: r.luz ?? 'No',
+              pais: (r.pais ?? '').toUpperCase(),           
+              otros: (r.otros ?? '').toUpperCase()          
+            };
+          }
+        },
+
+        cancelEdit(r){
+          r._editing = false;
+          r._editCopy = undefined;
+        },
+
+        saveEdit(r){
+          if (!r._editCopy.plaza) { alert('El campo plaza no puede estar vacío'); return; }
+          
+          this.lastUsedEstado = r._editCopy.estado || "LIBRE";
+          this.lastUsedVehiculo = r._editCopy.vehiculo || "AUTOCARAVANA";
+          this.saveLastUsedDefaults();
+          
+          r._editCopy.matricula = (r._editCopy.matricula || '').toUpperCase();
+          r._editCopy.pais = (r._editCopy.pais || '').toUpperCase();
+          r._editCopy.otros = (r._editCopy.otros || '').toUpperCase();
+
+          if (r._virtual) {
+            const nuevo = {
+              _id: genId(),
+              plaza: r._editCopy.plaza,
+              entrada: r._editCopy.entrada || null,
+              salida: r._editCopy.salida || null,
+              estado: r._editCopy.estado || 'LIBRE',
+              matricula: r._editCopy.matricula,
+              vehiculo: r._editCopy.vehiculo || '',
+              luz: r._editCopy.luz || 'No',
+              pais: r._editCopy.pais,
+              otros: r._editCopy.otros
+            };
+            this.registros.push(nuevo);
+            this.saveStorage();
+            if (this._virtualMap) delete this._virtualMap[r.plaza]; 
+            this.renderTabla();
+            return;
+          }
+
+          const idx = this.registros.findIndex(rr => rr._id === r._id);
+          if (idx !== -1) {
+            this.registros[idx].plaza = r._editCopy.plaza;
+            this.registros[idx].entrada = r._editCopy.entrada || null;
+            this.registros[idx].salida = r._editCopy.salida || null;
+            this.registros[idx].estado = r._editCopy.estado || 'LIBRE';
+            this.registros[idx].matricula = r._editCopy.matricula;
+            this.registros[idx].vehiculo = r._editCopy.vehiculo || '';
+            this.registros[idx].luz = r._editCopy.luz || 'No';
+            this.registros[idx].pais = r._editCopy.pais;
+            this.registros[idx].otros = r._editCopy.otros;
+            this.saveStorage();
+            r._editing = false;
+            r._editCopy = undefined;
+            this.renderTabla();
+            return;
+          }
+        },
+
+        deleteRecord(r){
+          if (!confirm('¿Eliminar el registro con plaza ' + r.plaza + '?')) return;
+          
+          if (r._virtual) {
+            alert('No hay registro para eliminar en esta plaza y fecha.');
+            return;
+          }
+          
+          this.registros = this.registros.filter(rr => rr._id !== r._id);
+          this.saveStorage();
+          
+          this.renderTabla();
+        },
+        
+        showAllRecords() {
+            this.filtros.fecha = ''; 
+            this.filtros.mostrarTodos = true;
+            this.renderTabla();
+        },
+
+        renderTabla(){ 
+             if (this.filtros.fecha) this.filtros.mostrarTodos = false; 
+        },
+
+        rowColorClass(r){
+          // Los colores solo se aplican en la vista diaria
+          if (this.filtros.mostrarTodos) return ''; 
+          
+          if (!r) return '';
+          const fecha = this.parseDate(this.filtros.fecha);
+          const e = this.parseDate(r.entrada);
+          const s = this.parseDate(r.salida);
+          
+          if (!fecha) return '';
+          
+          const isMatriculaOrOtrosSearchMode = (this.filtros.matricula || '').trim() !== '' || (this.filtros.otros || '').trim() !== '';
+
+          // 1. Salida (Amarillo chillón) - Solo relevante en vista diaria
+          if (!isMatriculaOrOtrosSearchMode && s && this.isoDate(fecha) === this.isoDate(s)) return 'bg-salida';
+
+          // 2. Entrada (Naranja) - Solo relevante en vista diaria
+          if (!isMatriculaOrOtrosSearchMode && e && this.isoDate(fecha) === this.isoDate(e)) return 'bg-entrada';
+          
+          // Comprobación de Actividad para el color LIBRE/SALIO
+          const isRegistroActiveOnDate = 
+              (e && s && fecha >= e && fecha <= s) || 
+              (e && !s && fecha >= e) || 
+              (!e && s && fecha <= s);
+          
+          // 3. Libre (Verde claro)
+          if ((r.estado || '').toUpperCase() === 'LIBRE') {
+            if (isRegistroActiveOnDate || r._virtual) return 'bg-libre';
+          }
+          
+          // 4. Salió (Rojo claro)
+          if (s && fecha > s) return 'bg-salio';
+          
+          return '';
+        },
+
+        exportJSON(){
+          const data = this.registros.map(r => {
+            const copy = {};
+            // Campos a exportar
+            ['plaza','entrada','salida','estado','matricula','vehiculo','luz','pais','otros'].forEach(k => copy[k] = r[k] ?? '');
+            return copy;
+          });
+          const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'registros_totales.json';
+          a.click();
+        },
+
+        exportToCSV() {
+            const allRecords = this.registros;
+            const separator = ';'; 
+            
+            if (allRecords.length === 0) {
+                alert('No hay registros para exportar.');
+                return;
+            }
+
+            const headers = ['plaza', 'entrada', 'salida', 'estado', 'matricula', 'vehiculo', 'luz', 'pais', 'otros'];
+            
+            let csvContent = headers.join(separator) + '\n';
+
+            allRecords.forEach(r => {
+                const row = headers.map(header => {
+                    let value = r[header] === null || r[header] === undefined ? '' : String(r[header]);
+                    if (value.includes(separator) || value.includes('\n') || value.includes('"')) {
+                        value = '"' + value.replace(/"/g, '""') + '"';
+                    }
+                    return value;
+                });
+                csvContent += row.join(separator) + '\n';
+            });
+
+            const bom = "\uFEFF"; 
+            
+            const blob = new Blob([bom + csvContent], {type: 'text/csv;charset=utf-8;'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'registros_totales.csv'; 
+            a.click();
+        },
+
+        importJSONFile(evt){
+          const file = evt.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            try {
+              const data = JSON.parse(e.target.result);
+              if (!Array.isArray(data)) { alert('JSON inválido: se esperaba un array de registros.'); return; }
+              
+              this.registros = [];
+              let added = 0;
+              data.forEach(item=>{
+                const rec = {
+                  _id: genId(), 
+                  plaza: item.plaza ?? '',
+                  entrada: item.entrada ?? null,
+                  salida: item.salida ?? null,
+                  estado: item.estado ?? '',
+                  matricula: (item.matricula ?? '').toUpperCase(), 
+                  vehiculo: item.vehiculo ?? '',
+                  luz: item.luz ?? '',
+                  pais: (item.pais ?? '').toUpperCase(),
+                  otros: (item.otros ?? '').toUpperCase()
+                };
+                if (rec.plaza) {
+                    this.registros.push(rec);
+                    added++;
+                }
+              });
+              
+              this.saveStorage();
+              alert('Importados ' + added + ' registros desde JSON. La tabla mostrará las 47 plazas.');
+              
+              if (this._virtualMap) delete this._virtualMap;
+              
+              this.renderTabla();
+            } catch(err){
+              alert('Error parseando JSON: ' + err.message);
+            } finally {
+              evt.target.value = '';
+            }
+          };
+          reader.readAsText(file);
+        },
+
+        resetFiltros(){
+          // Aseguramos que la fecha se establezca al día de hoy y desactivamos 'mostrarTodos'
+          this.filtros = { fecha: isoDate(new Date()), plaza:'', estado:'', vehiculo:'', luz:'', matricula:'', otros:'', mostrarTodos: false };
+          this.renderTabla();
+        }
+      };
+    }
+
+    // helpers
+    function genId(){ return 'id_'+Math.random().toString(36).slice(2,9); }
+    function isoDate(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().split('T')[0]; }
+
+    // Función modificada para convertir a mayúsculas en tiempo real. 
+    Alpine.magic('uppercase', el => {
+        el.value = el.value.toUpperCase();
+    });
+
+    // Inicializar app Alpine manualmente
+    window.addEventListener('DOMContentLoaded', () => {
+      setTimeout(()=> {
+        const rootEl = document.querySelector('[x-data="app()"]');
+        if (rootEl && rootEl.__x) {
+          rootEl.__x.$data.init();
+        }
+      }, 50);
+    });
+  </script>
+</body>
+</html>
